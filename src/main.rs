@@ -17,11 +17,15 @@ struct Visitor(bool);
 impl syn::visit_mut::VisitMut for Visitor {
     fn visit_item_fn_mut(&mut self, i: &mut syn::ItemFn) {
         let instrumented = i.attrs.iter().any(|attr| match &attr.meta {
-            syn::Meta::Path(syn::Path {
-                leading_colon: _,
-                segments,
-            }) => {
+            syn::Meta::Path(syn::Path { segments, .. }) => {
                 if let Some(path) = segments.last() {
+                    path.ident == "instrument"
+                } else {
+                    false
+                }
+            }
+            syn::Meta::List(syn::MetaList { path, .. }) => {
+                if let Some(path) = path.segments.last() {
                     path.ident == "instrument"
                 } else {
                     false
@@ -29,7 +33,8 @@ impl syn::visit_mut::VisitMut for Visitor {
             }
             _ => false,
         });
-        if !instrumented {
+
+        if !instrumented && i.sig.constness.is_none() {
             self.0 = true;
             i.attrs
                 .push(syn::parse_quote! { # [tracing :: instrument] });
@@ -39,11 +44,15 @@ impl syn::visit_mut::VisitMut for Visitor {
 impl syn::visit::Visit<'_> for Visitor {
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
         let instrumented = i.attrs.iter().any(|attr| match &attr.meta {
-            syn::Meta::Path(syn::Path {
-                leading_colon: _,
-                segments,
-            }) => {
+            syn::Meta::Path(syn::Path { segments, .. }) => {
                 if let Some(path) = segments.last() {
+                    path.ident == "instrument"
+                } else {
+                    false
+                }
+            }
+            syn::Meta::List(syn::MetaList { path, .. }) => {
+                if let Some(path) = path.segments.last() {
                     path.ident == "instrument"
                 } else {
                     false
@@ -51,7 +60,7 @@ impl syn::visit::Visit<'_> for Visitor {
             }
             _ => false,
         });
-        if !instrumented {
+        if !instrumented && i.sig.constness.is_none() {
             self.0 = true;
         }
     }
