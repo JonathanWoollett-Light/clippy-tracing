@@ -1,5 +1,6 @@
 use clap::Parser;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
@@ -7,19 +8,24 @@ use syn::spanned::Spanned;
 use syn::visit::Visit;
 use walkdir::WalkDir;
 
-// cargo run --release -- --path /home/ec2-user/firecracker --exclude 
+// cargo run --release -- --path /home/ec2-user/firecracker --exclude
 
 // TODO When adding on `fmt` for `Display` always add `skip(f)`.
 // TODO When adding on functions which return a mutable reference do not add `ret`.
 #[derive(Debug, Parser)]
 struct Args {
+    /// The path within which to work.
     #[arg(long)]
     path: Option<PathBuf>,
-    // Check if all functions are instrumented but don't make any change.
+    /// Check if all functions are instrumented but don't make any change.
     #[arg(long)]
     check: bool,
+    /// Strip all instrument attributes.
     #[arg(long)]
-    exclude: Vec<String>
+    strip: bool,
+    /// File paths which contain any of the string from this list will be ignored.
+    #[arg(long)]
+    exclude: Vec<String>,
 }
 struct SegmentedList {
     first: String,
@@ -44,6 +50,79 @@ impl From<SegmentedList> for String {
                 .map(|(x, y)| format!("{x}\n{y}"))
                 .collect::<String>()
         )
+    }
+}
+
+struct StripVisitor {
+    text: HashMap<usize, String>,
+}
+impl StripVisitor {
+    fn new(text: String) -> Self {
+        Self {
+            text: text
+                .split('\n')
+                .enumerate()
+                .map(|(i, x)| (i, String::from(x)))
+                .collect(),
+        }
+    }
+}
+impl From<StripVisitor> for String {
+    fn from(visitor: StripVisitor) -> String {
+        let mut vec = visitor.text.into_iter().collect::<Vec<_>>();
+        vec.sort_by_key(|(i, _)| *i);
+        vec.into_iter().map(|(_, x)| format!("{x}\n")).collect()
+    }
+}
+
+impl syn::visit::Visit<'_> for StripVisitor {
+    fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
+        for attr in i.attrs.iter() {
+            match &attr.meta {
+                syn::Meta::Path(syn::Path { segments, .. }) => {
+                    if let Some(path) = segments.last() {
+                        if path.ident == "instrument" {
+                            let line = attr.span().start().line - 1;
+                            self.text.remove(&line);
+                        }
+                    }
+                }
+                syn::Meta::List(syn::MetaList { path, .. }) => {
+                    if let Some(path) = path.segments.last() {
+                        if path.ident == "instrument" {
+                            let line = attr.span().start().line - 1;
+                            self.text.remove(&line);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.visit_block(&i.block);
+    }
+    fn visit_item_fn(&mut self, i: &syn::ItemFn) {
+        for attr in i.attrs.iter() {
+            match &attr.meta {
+                syn::Meta::Path(syn::Path { segments, .. }) => {
+                    if let Some(path) = segments.last() {
+                        if path.ident == "instrument" {
+                            let line = attr.span().start().line - 1;
+                            self.text.remove(&line);
+                        }
+                    }
+                }
+                syn::Meta::List(syn::MetaList { path, .. }) => {
+                    if let Some(path) = path.segments.last() {
+                        if path.ident == "instrument" {
+                            let line = attr.span().start().line - 1;
+                            self.text.remove(&line);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.visit_block(&i.block);
     }
 }
 
@@ -183,34 +262,48 @@ fn main() -> Result<(), MissingInstrument> {
         let name = entry.file_name().to_string_lossy();
 
         // Skip file paths containing excluded strings.
-        for exclude in args.exclude {
-            if exclude.contains(name);
-            continue;
+        for exclude in &args.exclude {
+            if name.contains(exclude) {
+                continue;
+            }
         }
 
         // Skip build.rs files.
         if name.ends_with("build.rs") {
             continue;
         }
+
         if name.ends_with(".rs") {
             let path = entry.into_path();
             let content = std::fs::read_to_string(&path).unwrap();
             let ast = syn::parse_file(&content).unwrap();
-            let mut visitor = Visitor::new(content, args.check);
-            visitor.visit_file(&ast);
-            if !args.check {
+
+            if args.strip {
+                let mut visitor = StripVisitor::new(content);
+                visitor.visit_file(&ast);
                 let mut file = std::fs::OpenOptions::new()
                     .write(true)
                     .truncate(true)
                     .open(&path)
                     .unwrap();
-                file.write_all(String::from(visitor.text).as_bytes())
-                    .unwrap();
-            }
-            if visitor.changed {
-                changed = true;
-                if args.check {
-                    break;
+                file.write_all(String::from(visitor).as_bytes()).unwrap();
+            } else {
+                let mut visitor = Visitor::new(content, args.check);
+                visitor.visit_file(&ast);
+                if !args.check {
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(&path)
+                        .unwrap();
+                    file.write_all(String::from(visitor.text).as_bytes())
+                        .unwrap();
+                }
+                if visitor.changed {
+                    changed = true;
+                    if args.check {
+                        break;
+                    }
                 }
             }
         }
