@@ -1,0 +1,60 @@
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Nightly
+      run: rustup default nightly
+
+    - name: Sort
+      run: |
+        cargo install cargo-sort
+        cargo sort --check
+
+    - name: Format
+      run: |
+        rustup component add rustfmt
+        cargo fmt --check
+      
+    - name: Audit
+      run: |
+        cargo install cargo-audit
+        cargo audit
+      
+    - name: Check
+      run: cargo check
+      
+    - name: Clippy
+      run: |
+        rustup component add clippy
+        cargo clippy --tests -- --deny warnings
+      
+    - name: Dependencies
+      run: |
+        cargo install cargo-udeps
+        cargo udeps
+
+    - name: Test
+      run: cargo test
+
+    # https://github.com/taiki-e/cargo-llvm-cov#continuous-integration
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Generate code coverage
+      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: lcov.info
+        fail_ci_if_error: true
