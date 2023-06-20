@@ -8,7 +8,6 @@ license = "Apache-2.0"
 repository = "https://github.com/JonathanWoollett-Light/clippy-tracing"
 readme = "README.md"
 
-
 [dependencies]
 clap = { version = "4.3.2", features = ["derive"] }
 proc-macro2 = { version = "1.0.59", features = ["span-locations"] }
