@@ -3,12 +3,13 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use std::collections::HashMap;
-use std::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 use walkdir::WalkDir;
+
+use std::fs::OpenOptions;
 
 // TODO When adding on `fmt` for `Display` always add `skip(f)`.
 // TODO When adding on functions which return a mutable reference do not add `ret`.
@@ -106,18 +107,18 @@ impl syn::visit::Visit<'_> for StripVisitor {
     }
 }
 
-struct CheckVisitor(bool);
+struct CheckVisitor(Option<proc_macro2::Span>);
 impl syn::visit::Visit<'_> for CheckVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
         if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
-            self.0 = true;
+            self.0 = Some(i.span());
         } else {
             self.visit_block(&i.block);
         }
     }
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
         if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
-            self.0 = true;
+            self.0 = Some(i.span());
         } else {
             self.visit_block(&i.block);
         }
@@ -148,23 +149,11 @@ impl syn::visit::Visit<'_> for FixVisitor {
 }
 
 #[derive(Debug)]
-enum Error {
-    Check,
-}
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::Check => write!(f, "Found a function missing instrumentation."),
-        }
-    }
-}
-impl std::error::Error for Error {}
+struct Error(proc_macro2::Span);
 
 const INSTRUMENT: &str = "#[tracing::instrument(level = \"trace\", ret)]";
 
-use std::fs::OpenOptions;
-
-fn main() -> Result<(), Error> {
+fn main() {
     let args = CommandLineArgs::parse();
 
     let input = args.input.unwrap_or(Input::Path(PathArgs {
@@ -178,29 +167,44 @@ fn main() -> Result<(), Error> {
                 let entry = entry_res.unwrap();
                 let path = entry.into_path();
 
-                let str = path.clone().into_os_string().into_string().unwrap();
+                let path_str = path.clone().into_os_string().into_string().unwrap();
                 // File paths must not contain any excluded strings.
                 // The file must not be a `build.rs` file.
                 // The file must be a `.rs` file.
-                let a = !exclude.iter().any(|e| str.contains(e));
+                let a = !exclude.iter().any(|e| path_str.contains(e));
                 let b = !path.ends_with("build.rs");
                 let c = path.extension().map_or(false, |ext| ext == "rs");
                 if a && b && c {
                     let path_clone = path.clone();
                     let file = OpenOptions::new().read(true).open(path).unwrap();
-                    apply(&args.action, file, |_| {
+                    let res = apply(&args.action, file, |_| {
                         OpenOptions::new()
                             .write(true)
                             .truncate(true)
                             .open(&path_clone)
                             .unwrap()
-                    })?;
+                    });
+                    if let Err(err) = res {
+                        eprintln!(
+                            "Missing instrumentation at {path_str}:{}:{}.",
+                            err.0.start().line,
+                            err.0.start().column
+                        );
+                        std::process::exit(1);
+                    }
                 }
             }
-            Ok(())
         }
         Input::Text(TextArgs { text }) => {
-            apply(&args.action, text.as_bytes(), |_| std::io::stdout())
+            let res = apply(&args.action, text.as_bytes(), |_| std::io::stdout());
+            if let Err(err) = res {
+                eprintln!(
+                    "Missing instrumentation at {}:{}.",
+                    err.0.start().line,
+                    err.0.start().column
+                );
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -231,10 +235,10 @@ fn apply<R: Read, W: Write>(
             Ok(())
         }
         Action::Check => {
-            let mut visitor = CheckVisitor(false);
+            let mut visitor = CheckVisitor(None);
             visitor.visit_file(&ast);
-            if visitor.0 {
-                Err(Error::Check)
+            if let Some(span) = visitor.0 {
+                Err(Error(span))
             } else {
                 Ok(())
             }

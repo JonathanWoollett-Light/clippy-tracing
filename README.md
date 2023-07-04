@@ -21,6 +21,6 @@ cargo install clippy-tracing
 - `clippy-tracing --action check path --path /path/to/my/file.rs`
 - `clippy-tracing --action fix path --path /path/to/my/file.rs`
 - `clippy-tracing --action strip path --path /path/to/my/file.rs`
-- `clippy-tracing --action check text -- text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
-- `clippy-tracing --action fix text -- text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
-- `clippy-tracing --action strip text -- text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
+- `clippy-tracing --action check text --text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
+- `clippy-tracing --action fix text --text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
+- `clippy-tracing --action strip text --text "$(cat /home/jonathan/Projects/clippy-tracing/src/test.rs)"`
