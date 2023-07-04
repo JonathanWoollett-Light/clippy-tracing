@@ -1,0 +1,16 @@
+[package]
+name = "clippy-tracing"
+version = "0.2.0"
+edition = "2021"
+description = "A tool to add, remove and check for `tracing::instrument` in large projects where it is infeasible to manually add it to thousands of functions."
+license = "Apache-2.0"
+
+repository = "https://github.com/JonathanWoollett-Light/clippy-tracing"
+readme = "../README.md"
+
+[dependencies]
+clap = { version = "4.3.2", features = ["derive"] }
+proc-macro2 = { version = "1.0.63", features = ["span-locations"] }
+quote = "1.0.28"
+syn = { version = "2.0.17", features = ["full", "extra-traits", "visit", "visit-mut", "printing"] } 
+walkdir = "2.3.3"

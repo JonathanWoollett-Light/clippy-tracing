@@ -52,7 +52,7 @@ struct PathArgs {
     #[arg(long)]
     path: PathBuf,
     /// Sub-paths which contain any of the strings from this list will be ignored.
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     exclude: Vec<String>,
 }
 
@@ -110,14 +110,16 @@ impl syn::visit::Visit<'_> for StripVisitor {
 struct CheckVisitor(Option<proc_macro2::Span>);
 impl syn::visit::Visit<'_> for CheckVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
-        if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
+        let attr = check_attributes(&i.attrs);
+        if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             self.0 = Some(i.span());
         } else {
             self.visit_block(&i.block);
         }
     }
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
-        if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
+        let attr = check_attributes(&i.attrs);
+        if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             self.0 = Some(i.span());
         } else {
             self.visit_block(&i.block);
@@ -133,14 +135,16 @@ impl From<FixVisitor> for String {
 }
 impl syn::visit::Visit<'_> for FixVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
-        if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
+        let attr = check_attributes(&i.attrs);
+        if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.sig.span().start().line;
             self.0.insert_before(line - 1, INSTRUMENT);
         }
         self.visit_block(&i.block);
     }
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
-        if !is_instrumented(&i.attrs) && i.sig.constness.is_none() {
+        let attr = check_attributes(&i.attrs);
+        if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.sig.span().start().line;
             self.0.insert_before(line - 1, INSTRUMENT);
         }
@@ -148,12 +152,9 @@ impl syn::visit::Visit<'_> for FixVisitor {
     }
 }
 
-#[derive(Debug)]
-struct Error(proc_macro2::Span);
-
 const INSTRUMENT: &str = "#[tracing::instrument(level = \"trace\", ret)]";
 
-fn main() {
+fn main() -> Result<(), ApplyError> {
     let args = CommandLineArgs::parse();
 
     let input = args.input.unwrap_or(Input::Path(PathArgs {
@@ -177,53 +178,61 @@ fn main() {
                 if a && b && c {
                     let path_clone = path.clone();
                     let file = OpenOptions::new().read(true).open(path).unwrap();
-                    let res = apply(&args.action, file, |_| {
+                    let Ok(res) = apply(&args.action, file, |_| {
                         OpenOptions::new()
                             .write(true)
                             .truncate(true)
                             .open(&path_clone)
                             .unwrap()
-                    });
-                    if let Err(err) = res {
+                    }) else { panic!("Failed to pass file {path_str}") };
+
+                    if let Some(span) = res {
                         eprintln!(
                             "Missing instrumentation at {path_str}:{}:{}.",
-                            err.0.start().line,
-                            err.0.start().column
+                            span.start().line,
+                            span.start().column
                         );
                         std::process::exit(1);
                     }
                 }
             }
+            Ok(())
         }
         Input::Text(TextArgs { text }) => {
-            let res = apply(&args.action, text.as_bytes(), |_| std::io::stdout());
-            if let Err(err) = res {
+            let res = apply(&args.action, text.as_bytes(), |_| std::io::stdout())?;
+            if let Some(span) = res {
                 eprintln!(
                     "Missing instrumentation at {}:{}.",
-                    err.0.start().line,
-                    err.0.start().column
+                    span.start().line,
+                    span.start().column
                 );
                 std::process::exit(1);
             }
+            Ok(())
         }
     }
+}
+
+#[derive(Debug)]
+pub enum ApplyError {
+    Parse(syn::parse::Error),
 }
 
 fn apply<R: Read, W: Write>(
     action: &Action,
     mut source: R,
     target: impl Fn(R) -> W,
-) -> Result<(), Error> {
+) -> Result<Option<proc_macro2::Span>, ApplyError> {
     let mut buf = Vec::new();
     source.read_to_end(&mut buf).unwrap();
-    let str = std::str::from_utf8(&buf).unwrap();
+    let text = std::str::from_utf8(&buf).unwrap();
 
-    let ast = syn::parse_file(str).unwrap();
+    let ast = syn::parse_file(text).map_err(ApplyError::Parse)?;
 
     match action {
         Action::Strip => {
             let mut visitor = StripVisitor(
-                str.split('\n')
+                text.split('\n')
                     .enumerate()
                     .map(|(i, x)| (i, String::from(x)))
                     .collect(),
@@ -232,21 +241,17 @@ fn apply<R: Read, W: Write>(
             target(source)
                 .write_all(String::from(visitor).as_bytes())
                 .unwrap();
-            Ok(())
+            Ok(None)
         }
         Action::Check => {
             let mut visitor = CheckVisitor(None);
             visitor.visit_file(&ast);
-            if let Some(span) = visitor.0 {
-                Err(Error(span))
-            } else {
-                Ok(())
-            }
+            Ok(visitor.0)
         }
         Action::Fix => {
             let mut visitor = FixVisitor(SegmentedList {
                 first: String::new(),
-                inner: str
+                inner: text
                     .split('\n')
                     .map(|x| (String::from(x), String::new()))
                     .collect(),
@@ -255,7 +260,7 @@ fn apply<R: Read, W: Write>(
             target(source)
                 .write_all(String::from(visitor).as_bytes())
                 .unwrap();
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -271,13 +276,59 @@ fn find_instrumented(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
     })
 }
 
-// A function is considered instruments if it has the `#[instrument]` attribute or the `#[test]` attribute.
-fn is_instrumented(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        match &attr.meta {
-            syn::Meta::List(syn::MetaList { path, .. }) => matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument"),
-            syn::Meta::Path(syn::Path { segments, .. }) => matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "test" || ident == "instrument"),
+struct Desc {
+    instrumented: bool,
+    skipped: bool,
+    test: bool,
+}
+
+// A function is considered instruments if it has the `#[instrument]` attribute or the `#[test]`
+// attribute.
+/// Returns a tuple where the 1st element is whether `tracing::instrument` is found in the list of
+/// attributes and the 2nd is whether `clippy_tracing_attributes::skip` is found in the list of
+/// attributes.
+fn check_attributes(attrs: &[syn::Attribute]) -> Desc {
+    let mut instrumented = false;
+    let mut skipped = false;
+    let mut test = false;
+
+    for attr in attrs {
+        if match &attr.meta {
+            syn::Meta::List(syn::MetaList { path, .. }) => {
+                matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument")
+            }
+            syn::Meta::Path(syn::Path { segments, .. }) => {
+                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument")
+            }
             syn::Meta::NameValue(_) => false,
+        } {
+            instrumented = true;
         }
-    })
+
+        if match &attr.meta {
+            syn::Meta::Path(syn::Path { segments, .. }) => {
+                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "test")
+            }
+            _ => false,
+        } {
+            test = true;
+        }
+
+        if match &attr.meta {
+            syn::Meta::List(syn::MetaList { path, .. }) => {
+                matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "clippy_tracing_skip")
+            }
+            syn::Meta::Path(syn::Path { segments, .. }) => {
+                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "clippy_tracing_skip")
+            }
+            syn::Meta::NameValue(_) => false,
+        } {
+            skipped = true;
+        }
+    }
+    Desc {
+        instrumented,
+        skipped,
+        test,
+    }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "clippy-tracing-attributes"
+version = "0.1.0"
+edition = "2021"
+
+description = "A tool to add, remove and check for `tracing::instrument` in large projects where it is infeasible to manually add it to thousands of functions."
+license = "Apache-2.0"
+
+repository = "https://github.com/JonathanWoollett-Light/clippy-tracing"
+readme = "../README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
