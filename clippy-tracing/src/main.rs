@@ -293,6 +293,7 @@ fn check_attributes(attrs: &[syn::Attribute]) -> Desc {
     let mut test = false;
 
     for attr in attrs {
+        // Match `#[instrument]`.
         if match &attr.meta {
             syn::Meta::List(syn::MetaList { path, .. }) => {
                 matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument")
@@ -305,15 +306,20 @@ fn check_attributes(attrs: &[syn::Attribute]) -> Desc {
             instrumented = true;
         }
 
+        // Match `#[test]` or `#[kani::proof]`.
         if match &attr.meta {
             syn::Meta::Path(syn::Path { segments, .. }) => {
-                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "test")
+                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "test" || ident == "proof")
+            }
+            syn::Meta::Path(syn::Path { segments, .. }) => {
+                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "proof")
             }
             _ => false,
         } {
             test = true;
         }
 
+        // Match `#[clippy_tracing_skip]`.
         if match &attr.meta {
             syn::Meta::List(syn::MetaList { path, .. }) => {
                 matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "clippy_tracing_skip")
