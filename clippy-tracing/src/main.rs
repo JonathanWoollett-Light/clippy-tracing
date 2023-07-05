@@ -308,13 +308,13 @@ fn check_attributes(attrs: &[syn::Attribute]) -> Desc {
 
         // Match `#[test]` or `#[kani::proof]`.
         if match &attr.meta {
+            syn::Meta::List(syn::MetaList { path, .. }) => {
+                matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "proof")
+            }
             syn::Meta::Path(syn::Path { segments, .. }) => {
                 matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "test" || ident == "proof")
             }
-            syn::Meta::Path(syn::Path { segments, .. }) => {
-                matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "proof")
-            }
-            _ => false,
+            syn::Meta::NameValue(_) => false,
         } {
             test = true;
         }
