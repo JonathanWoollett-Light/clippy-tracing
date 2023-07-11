@@ -1,15 +1,14 @@
 #![warn(clippy::pedantic)]
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 use walkdir::WalkDir;
-
-use std::fs::OpenOptions;
 
 // TODO When adding on `fmt` for `Display` always add `skip(f)`.
 // TODO When adding on functions which return a mutable reference do not add `ret`.
@@ -133,12 +132,13 @@ impl From<FixVisitor> for String {
         String::from(visitor.0)
     }
 }
+
 impl syn::visit::Visit<'_> for FixVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
         let attr = check_attributes(&i.attrs);
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.sig.span().start().line;
-            self.0.insert_before(line - 1, INSTRUMENT);
+            self.0.insert_before(line - 1, &instrument(&i.sig));
         }
         self.visit_block(&i.block);
     }
@@ -146,13 +146,34 @@ impl syn::visit::Visit<'_> for FixVisitor {
         let attr = check_attributes(&i.attrs);
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.sig.span().start().line;
-            self.0.insert_before(line - 1, INSTRUMENT);
+            self.0.insert_before(line - 1, &instrument(&i.sig));
         }
         self.visit_block(&i.block);
     }
 }
 
-const INSTRUMENT: &str = "#[tracing::instrument(level = \"trace\", ret)]";
+fn instrument(sig: &syn::Signature) -> String {
+    let iter = sig
+        .inputs
+        .iter()
+        .map(|arg| match arg {
+            syn::FnArg::Receiver(_) => vec![String::from("self")],
+            syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
+                syn::Pat::Ident(syn::PatIdent { ident, .. }) => vec![ident.to_string()],
+                syn::Pat::Struct(syn::PatStruct { fields, .. }) => fields
+                    .iter()
+                    .filter_map(|f| match &f.member {
+                        syn::Member::Named(ident) => Some(ident.to_string()),
+                        syn::Member::Unnamed(_) => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            },
+        })
+        .flatten();
+    let args = itertools::intersperse(iter, String::from(",")).collect::<String>();
+    format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]")
+}
 
 fn main() -> Result<(), ApplyError> {
     let args = CommandLineArgs::parse();
