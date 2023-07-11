@@ -172,7 +172,18 @@ fn instrument(sig: &syn::Signature) -> String {
         })
         .flatten();
     let args = itertools::intersperse(iter, String::from(",")).collect::<String>();
-    format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]")
+
+    match &sig.output {
+        syn::ReturnType::Default => {
+            format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]")
+        }
+        syn::ReturnType::Type(_, t) => match &**t {
+            syn::Type::Reference(_) => {
+                format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
+            }
+            _ => format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]"),
+        },
+    }
 }
 
 fn main() -> Result<(), ApplyError> {
