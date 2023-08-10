@@ -60,23 +60,24 @@ struct SegmentedList {
     inner: Vec<(String, String)>,
 }
 impl SegmentedList {
-    fn insert_before(&mut self, line: usize, text: &str) {
-        if line == 0 {
-            self.first.push_str(text);
+    fn set_before(&mut self, line: usize, text: String) {
+        let s = if let Some(i) = line.checked_sub(1) {
+            &mut self.inner[i].1
         } else {
-            self.inner[line - 1].1.push_str(text);
-        }
+            &mut self.first
+        };
+        debug_assert!(s.is_empty());
+        *s = text;
     }
 }
 impl From<SegmentedList> for String {
     fn from(list: SegmentedList) -> String {
+        let iter = list.inner.into_iter().map(|(x, y)| format!("{x}{}{y}", if !y.is_empty() { "\n" } else { "" }));
         format!(
-            "{}\n{}",
+            "{}{}{}",
             list.first,
-            list.inner
-                .into_iter()
-                .map(|(x, y)| format!("{x}\n{y}"))
-                .collect::<String>()
+            if !list.first.is_empty() { "\n" } else { "" },
+            itertools::intersperse(iter, String::from("\n")).collect::<String>()
         )
     }
 }
@@ -137,16 +138,25 @@ impl syn::visit::Visit<'_> for FixVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
         let attr = check_attributes(&i.attrs);
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
-            let line = i.sig.span().start().line;
-            self.0.insert_before(line - 1, &instrument(&i.sig));
+            let line = i.span().start().line;
+
+            let attr_string = instrument(&i.sig);
+            let indent = i.span().start().column;
+            let attr = format!("{}{attr_string}", " ".repeat(indent));
+            self.0.set_before(line - 1, attr);
         }
         self.visit_block(&i.block);
     }
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
         let attr = check_attributes(&i.attrs);
+
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
-            let line = i.sig.span().start().line;
-            self.0.insert_before(line - 1, &instrument(&i.sig));
+            let line = i.span().start().line;
+
+            let attr_string = instrument(&i.sig);
+            let indent = i.span().start().column;
+            let attr = format!("{}{attr_string}", " ".repeat(indent));
+            self.0.set_before(line - 1, attr);
         }
         self.visit_block(&i.block);
     }
@@ -173,17 +183,7 @@ fn instrument(sig: &syn::Signature) -> String {
         .flatten();
     let args = itertools::intersperse(iter, String::from(",")).collect::<String>();
 
-    match &sig.output {
-        syn::ReturnType::Default => {
-            format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]")
-        }
-        syn::ReturnType::Type(_, t) => match &**t {
-            syn::Type::Reference(_) => {
-                format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
-            }
-            _ => format!("#[tracing::instrument(level = \"trace\", ret(skip), skip({args}))]"),
-        },
-    }
+    format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
 }
 
 fn main() -> Result<(), ApplyError> {
