@@ -12,6 +12,9 @@ readme = "../README.md"
 clap = { version = "4.3.2", features = ["derive"] }
 proc-macro2 = { version = "1.0.63", features = ["span-locations"] }
 quote = "1.0.28"
-syn = { version = "2.0.17", features = ["full", "extra-traits", "visit", "visit-mut", "printing"] } 
+syn = { version = "2.0.17", features = ["extra-traits", "visit", "visit-mut", "printing"] } 
 walkdir = "2.3.3"
 itertools = "0.11.0"
+
+[dev-dependencies]
+uuid = { version = "1.4.1", features = ["v4"] }

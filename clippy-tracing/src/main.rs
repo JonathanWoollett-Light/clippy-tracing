@@ -1,34 +1,28 @@
 #![warn(clippy::pedantic)]
 
+use clap::{Parser, ValueEnum};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-
-use clap::{Args, Parser, Subcommand, ValueEnum};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 use walkdir::WalkDir;
 
-// TODO When adding on `fmt` for `Display` always add `skip(f)`.
-// TODO When adding on functions which return a mutable reference do not add `ret`.
-// TODO Fix bug where it adds an extra newline each time you call `strip` or `fix`.
+use std::error::Error;
 
 #[derive(Parser)]
 struct CommandLineArgs {
-    /// The path within which to work.
-    #[command(subcommand)]
-    input: Option<Input>,
     /// The action to take.
     #[arg(long)]
     action: Action,
-}
-#[derive(Subcommand)]
-enum Input {
-    /// Apply to a given text.
-    Text(TextArgs),
-    /// Apply to all files under the given path.
-    Path(PathArgs),
+    /// The path to look in.
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Sub-paths which contain any of the strings from this list will be ignored.
+    #[arg(long, value_delimiter = ',')]
+    exclude: Vec<String>,
 }
 #[derive(Clone, ValueEnum)]
 enum Action {
@@ -38,21 +32,6 @@ enum Action {
     Fix,
     /// Removes `tracing::instrument` from all functions.
     Strip,
-}
-#[derive(Args)]
-struct TextArgs {
-    /// The text to work on.
-    #[arg(long)]
-    text: String,
-}
-#[derive(Args)]
-struct PathArgs {
-    /// The path to look in.
-    #[arg(long)]
-    path: PathBuf,
-    /// Sub-paths which contain any of the strings from this list will be ignored.
-    #[arg(long, value_delimiter = ',')]
-    exclude: Vec<String>,
 }
 
 struct SegmentedList {
@@ -72,11 +51,14 @@ impl SegmentedList {
 }
 impl From<SegmentedList> for String {
     fn from(list: SegmentedList) -> String {
-        let iter = list.inner.into_iter().map(|(x, y)| format!("{x}{}{y}", if !y.is_empty() { "\n" } else { "" }));
+        let iter = list
+            .inner
+            .into_iter()
+            .map(|(x, y)| format!("{x}{}{y}", if y.is_empty() { "" } else { "\n" }));
         format!(
             "{}{}{}",
             list.first,
-            if !list.first.is_empty() { "\n" } else { "" },
+            if list.first.is_empty() { "" } else { "\n" },
             itertools::intersperse(iter, String::from("\n")).collect::<String>()
         )
     }
@@ -87,7 +69,10 @@ impl From<StripVisitor> for String {
     fn from(visitor: StripVisitor) -> String {
         let mut vec = visitor.0.into_iter().collect::<Vec<_>>();
         vec.sort_by_key(|(i, _)| *i);
-        vec.into_iter().map(|(_, x)| format!("{x}\n")).collect()
+        vec.into_iter().fold(String::new(), |mut output, (_, x)| {
+            output.push_str(&format!("{x}\n"));
+            output
+        })
     }
 }
 impl syn::visit::Visit<'_> for StripVisitor {
@@ -163,103 +148,118 @@ impl syn::visit::Visit<'_> for FixVisitor {
 }
 
 fn instrument(sig: &syn::Signature) -> String {
-    let iter = sig
-        .inputs
-        .iter()
-        .map(|arg| match arg {
-            syn::FnArg::Receiver(_) => vec![String::from("self")],
-            syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
-                syn::Pat::Ident(syn::PatIdent { ident, .. }) => vec![ident.to_string()],
-                syn::Pat::Struct(syn::PatStruct { fields, .. }) => fields
-                    .iter()
-                    .filter_map(|f| match &f.member {
-                        syn::Member::Named(ident) => Some(ident.to_string()),
-                        syn::Member::Unnamed(_) => None,
-                    })
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            },
-        })
-        .flatten();
+    let iter = sig.inputs.iter().flat_map(|arg| match arg {
+        syn::FnArg::Receiver(_) => vec![String::from("self")],
+        syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
+            syn::Pat::Ident(syn::PatIdent { ident, .. }) => vec![ident.to_string()],
+            syn::Pat::Struct(syn::PatStruct { fields, .. }) => fields
+                .iter()
+                .filter_map(|f| match &f.member {
+                    syn::Member::Named(ident) => Some(ident.to_string()),
+                    syn::Member::Unnamed(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        },
+    });
     let args = itertools::intersperse(iter, String::from(",")).collect::<String>();
 
     format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
 }
 
-fn main() -> Result<(), ApplyError> {
+fn main() {
+    if let Err(err) = exec() {
+        eprintln!("Error: {err:?}");
+        std::process::exit(1);
+    }
+}
+
+#[derive(Debug)]
+enum ExecError {
+    Entry(walkdir::Error),
+    String,
+    Apply(ApplyError),
+}
+impl fmt::Display for ExecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Entry(entry) => write!(f, "Failed to read entry in file path: {entry}"),
+            Self::String => write!(f, "Failed to parse file path to string."),
+            Self::Apply(apply) => write!(f, "Failed to run apply function: {apply}"),
+        }
+    }
+}
+
+impl Error for ExecError {}
+
+fn exec() -> Result<(), ExecError> {
     let args = CommandLineArgs::parse();
 
-    let input = args.input.unwrap_or(Input::Path(PathArgs {
-        path: PathBuf::from("."),
-        exclude: Vec::new(),
-    }));
+    let path = args.path.unwrap_or(PathBuf::from("."));
+    for entry_res in WalkDir::new(path).follow_links(true) {
+        let entry = entry_res.map_err(ExecError::Entry)?;
+        let path = entry.into_path();
 
-    match input {
-        Input::Path(PathArgs { path, exclude }) => {
-            for entry_res in WalkDir::new(path).follow_links(true) {
-                let entry = entry_res.unwrap();
-                let path = entry.into_path();
+        let path_str = path.to_str().ok_or(ExecError::String)?;
+        // File paths must not contain any excluded strings.
+        let a = !args.exclude.iter().any(|e| path_str.contains(e));
+        // The file must not be a `build.rs` file.
+        let b = !path.ends_with("build.rs");
+        // The file must be a `.rs` file.
+        let c = path.extension().map_or(false, |ext| ext == "rs");
 
-                let path_str = path.clone().into_os_string().into_string().unwrap();
-                // File paths must not contain any excluded strings.
-                // The file must not be a `build.rs` file.
-                // The file must be a `.rs` file.
-                let a = !exclude.iter().any(|e| path_str.contains(e));
-                let b = !path.ends_with("build.rs");
-                let c = path.extension().map_or(false, |ext| ext == "rs");
-                if a && b && c {
-                    let path_clone = path.clone();
-                    let file = OpenOptions::new().read(true).open(path).unwrap();
-                    let Ok(res) = apply(&args.action, file, |_| {
-                        OpenOptions::new()
-                            .write(true)
-                            .truncate(true)
-                            .open(&path_clone)
-                            .unwrap()
-                    }) else { panic!("Failed to pass file {path_str}") };
+        if a && b && c {
+            let file = OpenOptions::new().read(true).open(&path).unwrap();
+            let res = apply(&args.action, file, |_| {
+                OpenOptions::new().write(true).truncate(true).open(&path)
+            })
+            .map_err(ExecError::Apply)?;
 
-                    if let Some(span) = res {
-                        eprintln!(
-                            "Missing instrumentation at {path_str}:{}:{}.",
-                            span.start().line,
-                            span.start().column
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            }
-            Ok(())
-        }
-        Input::Text(TextArgs { text }) => {
-            let res = apply(&args.action, text.as_bytes(), |_| std::io::stdout())?;
             if let Some(span) = res {
-                eprintln!(
-                    "Missing instrumentation at {}:{}.",
+                println!(
+                    "Missing instrumentation at {path_str}:{}:{}.",
                     span.start().line,
                     span.start().column
                 );
                 std::process::exit(1);
             }
-            Ok(())
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum ApplyError {
+    Read(std::io::Error),
+    Utf(std::str::Utf8Error),
+    Syn(syn::parse::Error),
+    Target(std::io::Error),
+    Write(std::io::Error),
+}
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(read) => write!(f, "Failed to read file: {read}"),
+            Self::Utf(utf) => write!(f, "Failed to parse file to utf8: {utf}"),
+            Self::Syn(syn) => write!(f, "Failed to parse file to syn ast: {syn}"),
+            Self::Target(target) => write!(f, "Failed to get write target: {target}"),
+            Self::Write(write) => write!(f, "Failed to write result to target: {write}"),
         }
     }
 }
 
-#[derive(Debug)]
-pub enum ApplyError {
-    Parse(syn::parse::Error),
-}
+impl Error for ApplyError {}
 
 fn apply<R: Read, W: Write>(
     action: &Action,
     mut source: R,
-    target: impl Fn(R) -> W,
+    target: impl Fn(R) -> Result<W, std::io::Error>,
 ) -> Result<Option<proc_macro2::Span>, ApplyError> {
     let mut buf = Vec::new();
-    source.read_to_end(&mut buf).unwrap();
-    let text = std::str::from_utf8(&buf).unwrap();
+    source.read_to_end(&mut buf).map_err(ApplyError::Read)?;
+    let text = std::str::from_utf8(&buf).map_err(ApplyError::Utf)?;
 
-    let ast = syn::parse_file(text).map_err(ApplyError::Parse)?;
+    let ast = syn::parse_file(text).map_err(ApplyError::Syn)?;
 
     match action {
         Action::Strip => {
@@ -270,9 +270,11 @@ fn apply<R: Read, W: Write>(
                     .collect(),
             );
             visitor.visit_file(&ast);
+            let out = String::from(visitor);
             target(source)
-                .write_all(String::from(visitor).as_bytes())
-                .unwrap();
+                .map_err(ApplyError::Target)?
+                .write_all(out.as_bytes())
+                .map_err(ApplyError::Write)?;
             Ok(None)
         }
         Action::Check => {
@@ -289,9 +291,11 @@ fn apply<R: Read, W: Write>(
                     .collect(),
             });
             visitor.visit_file(&ast);
+            let out = String::from(visitor);
             target(source)
-                .write_all(String::from(visitor).as_bytes())
-                .unwrap();
+                .map_err(ApplyError::Target)?
+                .write_all(out.as_bytes())
+                .map_err(ApplyError::Write)?;
             Ok(None)
         }
     }
