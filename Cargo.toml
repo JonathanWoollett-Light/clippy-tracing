@@ -1,2 +1,2 @@
 [workspace]
-members = ["clippy-tracing","clippy-tracing-attributes"]
+members = ["clippy-tracing", "clippy-tracing-attributes"]
