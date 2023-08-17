@@ -14,20 +14,27 @@ jobs:
     - name: Nightly
       run: rustup default nightly
 
+    # Install and cache `cargo-sort`
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-sort
+
     - name: Sort
-      run: |
-        cargo install cargo-sort
-        cargo sort --check
+      run: cargo sort --check
 
     - name: Format
       run: |
         rustup component add rustfmt
         cargo fmt --check
       
+    # Install and cache `cargo-audit`
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-audit
+        locked: false # See https://github.com/taiki-e/cache-cargo-install-action/issues/2
+
     - name: Audit
-      run: |
-        cargo install cargo-audit
-        cargo audit
+      run: cargo audit
       
     - name: Check
       run: cargo check
@@ -37,18 +44,23 @@ jobs:
         rustup component add clippy
         cargo clippy --tests -- --deny warnings
       
+    # Install and cache `cargo-udeps`
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-udeps
+
     - name: Dependencies
-      run: |
-        cargo install cargo-udeps
-        cargo udeps
+      run: cargo udeps
 
     - name: Test
       run: cargo test
 
     # https://github.com/taiki-e/cargo-llvm-cov#continuous-integration
 
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
+    # Install and cache `cargo-llvm-cov`
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-llvm-cov
 
     - name: Generate code coverage
       run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
