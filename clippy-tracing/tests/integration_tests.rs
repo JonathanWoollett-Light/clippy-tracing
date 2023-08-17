@@ -16,7 +16,7 @@ fn setup(text: &str) -> String {
     file.write_all(text.as_bytes()).unwrap();
     path
 }
-fn check_fix(text: &str, path: &str) {
+fn check_file(text: &str, path: &str) {
     let mut file = OpenOptions::new()
         .create(false)
         .read(true)
@@ -27,7 +27,6 @@ fn check_fix(text: &str, path: &str) {
     file.read_to_string(&mut buffer).unwrap();
     println!("path: {path}");
     assert_eq!(text, buffer);
-    remove_file(path).unwrap();
 }
 
 fn fix(given: &str, expected: &str) {
@@ -39,7 +38,8 @@ fn fix(given: &str, expected: &str) {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, []);
     assert_eq!(output.stderr, []);
-    check_fix(expected, &path);
+    check_file(expected, &path);
+    remove_file(path).unwrap();
 }
 fn strip(given: &str, expected: &str) {
     let path = setup(given);
@@ -50,13 +50,14 @@ fn strip(given: &str, expected: &str) {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, []);
     assert_eq!(output.stderr, []);
-    check_fix(expected, &path);
+    check_file(expected, &path);
+    remove_file(path).unwrap();
 }
 
 #[test]
 fn fix_one() {
-    const GIVEN: &str = "fn main() { }";
-    const EXPECTED: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }";
+    const GIVEN: &str = "fn main() { }\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
+    const EXPECTED: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[tracing::instrument(level = \"trace\", skip(lhs, rhs))]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
     fix(GIVEN, EXPECTED);
 }
 
@@ -77,7 +78,7 @@ fn check_one() {
 #[test]
 fn check_two() {
     const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[test]\nfn my_test() { }";
-    let path = setup(GIVEN);
+    let path: String = setup(GIVEN);
     let output = Command::new(BINARY)
         .args(["--action", "check", "--path", &path])
         .output()
@@ -93,4 +94,83 @@ fn strip_one() {
     const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }";
     const EXPECTED: &str = "fn main() { }";
     strip(GIVEN, EXPECTED);
+}
+#[test]
+fn readme() {
+    const GIVEN: &str = r#"fn main() {
+    println!("Hello World!");
+}
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+    let path: String = setup(GIVEN);
+
+    // Check
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let missing = format!("Missing instrumentation at {path}:9:4.\n");
+    assert_eq!(output.stdout, missing.as_bytes());
+    assert_eq!(output.stderr, []);
+
+    const EXPECTED: &str = r#"#[tracing::instrument(level = "trace", skip())]
+fn main() {
+    println!("Hello World!");
+}
+#[tracing::instrument(level = "trace", skip(lhs, rhs))]
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    #[tracing::instrument(level = "trace", skip(lhs, rhs))]
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+
+    // Fix
+    let output = Command::new(BINARY)
+        .args(["--action", "fix", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    check_file(EXPECTED, &path);
+
+    // Check
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+
+    // Strip
+    let output = Command::new(BINARY)
+        .args(["--action", "strip", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    check_file(GIVEN, &path);
 }
