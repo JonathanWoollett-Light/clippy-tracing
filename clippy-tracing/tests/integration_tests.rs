@@ -75,6 +75,7 @@ fn check_one() {
     assert_eq!(output.stderr, []);
     remove_file(path).unwrap();
 }
+
 #[test]
 fn check_two() {
     const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[test]\nfn my_test() { }";
@@ -85,6 +86,21 @@ fn check_two() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    remove_file(path).unwrap();
+}
+
+#[test]
+fn check_three() {
+    const GIVEN: &str = "impl One {\n    fn one() { }\n}";
+    let path = setup(GIVEN);
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let expected_stdout = format!("Missing instrumentation at {path}:2:4.\n");
+    assert_eq!(output.stdout, expected_stdout.as_bytes());
     assert_eq!(output.stderr, []);
     remove_file(path).unwrap();
 }
