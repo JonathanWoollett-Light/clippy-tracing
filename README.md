@@ -37,7 +37,7 @@ mod tests {
 }
 ```
 
-```
+```bash
 clippy-tracing --action check
 echo $? # 1
 clippy-tracing --action fix
@@ -66,7 +66,7 @@ mod tests {
 }
 ```
 
-```
+```bash
 clippy-tracing --action check
 echo $? # 0
 clippy-tracing --action strip
