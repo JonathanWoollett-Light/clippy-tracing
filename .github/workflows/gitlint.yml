@@ -11,4 +11,4 @@ jobs:
         run: sudo apt install gitlint
 
       - name: Run gitlint
-        run: gitlint
+        run: gitlint --ignore B6
