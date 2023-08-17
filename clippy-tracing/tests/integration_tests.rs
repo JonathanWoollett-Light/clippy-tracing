@@ -16,6 +16,7 @@ fn setup(text: &str) -> String {
     file.write_all(text.as_bytes()).unwrap();
     path
 }
+
 fn check_file(text: &str, path: &str) {
     let mut file = OpenOptions::new()
         .create(false)
@@ -41,6 +42,7 @@ fn fix(given: &str, expected: &str) {
     check_file(expected, &path);
     remove_file(path).unwrap();
 }
+
 fn strip(given: &str, expected: &str) {
     let path = setup(given);
     let output = Command::new(BINARY)
@@ -55,9 +57,33 @@ fn strip(given: &str, expected: &str) {
 }
 
 #[test]
+fn exec_error() {
+    // Create file path for a file that doesn't exist.
+    let id = uuid::Uuid::new_v4();
+    let path = format!("/tmp/{id}.rs");
+
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, []);
+    let expected_stderr = format!("Error: Failed to read entry in file path: IO error for operation on {path}: No such file or directory (os error 2)\n");
+    assert_eq!(output.stderr, expected_stderr.as_bytes());
+}
+
+#[test]
 fn fix_one() {
     const GIVEN: &str = "fn main() { }\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
     const EXPECTED: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[tracing::instrument(level = \"trace\", skip(lhs, rhs))]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
+    fix(GIVEN, EXPECTED);
+}
+
+#[test]
+fn fix_two() {
+    const GIVEN: &str = "impl Unit {\n    fn one() {}\n}";
+    const EXPECTED: &str =
+        "impl Unit {\n    #[tracing::instrument(level = \"trace\", skip())]\n    fn one() {}\n}";
     fix(GIVEN, EXPECTED);
 }
 
@@ -69,7 +95,7 @@ fn check_one() {
         .args(["--action", "check", "--path", &path])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let expected_stdout = format!("Missing instrumentation at {path}:1:0.\n");
     assert_eq!(output.stdout, expected_stdout.as_bytes());
     assert_eq!(output.stderr, []);
@@ -98,7 +124,7 @@ fn check_three() {
         .args(["--action", "check", "--path", &path])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let expected_stdout = format!("Missing instrumentation at {path}:2:4.\n");
     assert_eq!(output.stdout, expected_stdout.as_bytes());
     assert_eq!(output.stderr, []);
@@ -153,7 +179,7 @@ mod tests {
         .args(["--action", "check", "--path", &path])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let missing = format!("Missing instrumentation at {path}:9:4.\n");
     assert_eq!(output.stdout, missing.as_bytes());
     assert_eq!(output.stderr, []);
