@@ -1,8 +1,26 @@
-#![warn(clippy::pedantic)]
+//! A tool to add, remove and check for `tracing::instrument` in large projects where it is infeasible to manually add it to thousands of functions.
 
+#![warn(clippy::pedantic, clippy::restriction)]
+#![allow(
+    clippy::blanket_clippy_restriction_lints,
+    clippy::single_call_fn,
+    clippy::absolute_paths,
+    clippy::pattern_type_mismatch,
+    clippy::implicit_return,
+    clippy::question_mark_used,
+    clippy::missing_trait_methods,
+    clippy::min_ident_chars,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::wildcard_enum_match_arm,
+    clippy::arithmetic_side_effects
+)]
+
+extern crate alloc;
+
+use alloc::fmt;
 use clap::{Parser, ValueEnum};
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -12,6 +30,7 @@ use walkdir::WalkDir;
 
 use std::error::Error;
 
+/// The command line arguments for the application.
 #[derive(Parser)]
 struct CommandLineArgs {
     /// The action to take.
@@ -24,6 +43,8 @@ struct CommandLineArgs {
     #[arg(long, value_delimiter = ',')]
     exclude: Vec<String>,
 }
+
+/// The action to take.
 #[derive(Clone, ValueEnum)]
 enum Action {
     /// Checks `tracing::instrument` is on all functions.
@@ -34,19 +55,26 @@ enum Action {
     Strip,
 }
 
+/// A list of text lines split so that newlines can be efficiently inserted between them.
 struct SegmentedList {
+    /// The first new line.
     first: String,
+    /// The inner vector used to contain the original lines `.0` and the new lines `.1`.
     inner: Vec<(String, String)>,
 }
 impl SegmentedList {
-    fn set_before(&mut self, line: usize, text: String) {
+    /// Sets the text line before `line` to `text`.
+    fn set_before(&mut self, line: usize, text: String) -> bool {
         let s = if let Some(i) = line.checked_sub(1) {
-            &mut self.inner[i].1
+            let Some(mut_ref) = self.inner.get_mut(i) else {
+                return false;
+            };
+            &mut mut_ref.1
         } else {
             &mut self.first
         };
-        debug_assert!(s.is_empty());
         *s = text;
+        true
     }
 }
 impl From<SegmentedList> for String {
@@ -64,6 +92,7 @@ impl From<SegmentedList> for String {
     }
 }
 
+/// Visitor for the `strip` action.
 struct StripVisitor(HashMap<usize, String>);
 impl From<StripVisitor> for String {
     fn from(visitor: StripVisitor) -> String {
@@ -96,6 +125,7 @@ impl syn::visit::Visit<'_> for StripVisitor {
     }
 }
 
+/// Visitor for the `check` action.
 struct CheckVisitor(Option<proc_macro2::Span>);
 impl syn::visit::Visit<'_> for CheckVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
@@ -116,6 +146,7 @@ impl syn::visit::Visit<'_> for CheckVisitor {
     }
 }
 
+/// Visitor for the `fix` action.
 struct FixVisitor(SegmentedList);
 impl From<FixVisitor> for String {
     fn from(visitor: FixVisitor) -> String {
@@ -131,8 +162,8 @@ impl syn::visit::Visit<'_> for FixVisitor {
 
             let attr_string = instrument(&i.sig);
             let indent = i.span().start().column;
-            let attr = format!("{}{attr_string}", " ".repeat(indent));
-            self.0.set_before(line - 1, attr);
+            let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
+            self.0.set_before(line - 1, indent_attr);
         }
         self.visit_block(&i.block);
     }
@@ -144,13 +175,14 @@ impl syn::visit::Visit<'_> for FixVisitor {
 
             let attr_string = instrument(&i.sig);
             let indent = i.span().start().column;
-            let attr = format!("{}{attr_string}", " ".repeat(indent));
-            self.0.set_before(line - 1, attr);
+            let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
+            self.0.set_before(line - 1, indent_attr);
         }
         self.visit_block(&i.block);
     }
 }
 
+/// Returns the instrument macro for a given function signature.
 fn instrument(sig: &syn::Signature) -> String {
     let iter = sig.inputs.iter().flat_map(|arg| match arg {
         syn::FnArg::Receiver(_) => vec![String::from("self")],
@@ -171,17 +203,52 @@ fn instrument(sig: &syn::Signature) -> String {
     format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
 }
 
-fn main() {
-    if let Err(err) = exec() {
-        eprintln!("Error: {err:?}");
-        std::process::exit(1);
+use std::process::ExitCode;
+
+/// Type to return from `main` to support returning an error then handling it.
+#[repr(u8)]
+enum Exit {
+    /// Process completed successfully.
+    Ok = 0,
+    /// Process encountered an error.
+    Error = 1,
+    /// Process ran `check` action and found missing instrumentation.
+    Check = 2,
+}
+#[allow(clippy::as_conversions)]
+impl std::process::Termination for Exit {
+    fn report(self) -> ExitCode {
+        ExitCode::from(self as u8)
     }
 }
 
+fn main() -> Exit {
+    match exec() {
+        Err(err) => {
+            eprintln!("Error: {err}");
+            Exit::Error
+        }
+        Ok(None) => Exit::Ok,
+        Ok(Some((path, line, column))) => {
+            println!(
+                "Missing instrumentation at {}:{line}:{column}.",
+                path.display()
+            );
+            Exit::Check
+        }
+    }
+}
+
+/// Error for [`exec`].
 #[derive(Debug)]
 enum ExecError {
+    /// Failed to read entry in file path.
     Entry(walkdir::Error),
+    /// Failed to parse file path to string.
     String,
+    /// Failed to open file.
+    File(std::io::Error),
+    /// Failed to run apply function.
     Apply(ApplyError),
 }
 impl fmt::Display for ExecError {
@@ -189,6 +256,7 @@ impl fmt::Display for ExecError {
         match self {
             Self::Entry(entry) => write!(f, "Failed to read entry in file path: {entry}"),
             Self::String => write!(f, "Failed to parse file path to string."),
+            Self::File(file) => write!(f, "Failed to open file: {file}"),
             Self::Apply(apply) => write!(f, "Failed to run apply function: {apply}"),
         }
     }
@@ -196,48 +264,56 @@ impl fmt::Display for ExecError {
 
 impl Error for ExecError {}
 
-fn exec() -> Result<(), ExecError> {
+/// Wraps functionality from `main` to support returning an error then handling it.
+fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
     let args = CommandLineArgs::parse();
 
     let path = args.path.unwrap_or(PathBuf::from("."));
     for entry_res in WalkDir::new(path).follow_links(true) {
         let entry = entry_res.map_err(ExecError::Entry)?;
-        let path = entry.into_path();
+        let entry_path = entry.into_path();
 
-        let path_str = path.to_str().ok_or(ExecError::String)?;
+        let path_str = entry_path.to_str().ok_or(ExecError::String)?;
         // File paths must not contain any excluded strings.
         let a = !args.exclude.iter().any(|e| path_str.contains(e));
         // The file must not be a `build.rs` file.
-        let b = !path.ends_with("build.rs");
+        let b = !entry_path.ends_with("build.rs");
         // The file must be a `.rs` file.
-        let c = path.extension().map_or(false, |ext| ext == "rs");
+        let c = entry_path.extension().map_or(false, |ext| ext == "rs");
 
         if a && b && c {
-            let file = OpenOptions::new().read(true).open(&path).unwrap();
+            let file = OpenOptions::new()
+                .read(true)
+                .open(&entry_path)
+                .map_err(ExecError::File)?;
             let res = apply(&args.action, file, |_| {
-                OpenOptions::new().write(true).truncate(true).open(&path)
+                OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&entry_path)
             })
             .map_err(ExecError::Apply)?;
 
             if let Some(span) = res {
-                println!(
-                    "Missing instrumentation at {path_str}:{}:{}.",
-                    span.start().line,
-                    span.start().column
-                );
-                std::process::exit(1);
+                return Ok(Some((entry_path, span.start().line, span.start().column)));
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
+/// Error for [`apply`].
 #[derive(Debug)]
 enum ApplyError {
+    /// Failed to read file.
     Read(std::io::Error),
-    Utf(std::str::Utf8Error),
+    /// Failed to parse file to utf8.
+    Utf(core::str::Utf8Error),
+    /// Failed to parse file to syn ast.
     Syn(syn::parse::Error),
+    /// Failed to get write target.
     Target(std::io::Error),
+    /// Failed to write result to target.
     Write(std::io::Error),
 }
 impl fmt::Display for ApplyError {
@@ -254,6 +330,8 @@ impl fmt::Display for ApplyError {
 
 impl Error for ApplyError {}
 
+/// Apply the given action to the given source and outputs the result to the target produced by the
+/// given closure.
 fn apply<R: Read, W: Write>(
     action: &Action,
     mut source: R,
@@ -261,7 +339,7 @@ fn apply<R: Read, W: Write>(
 ) -> Result<Option<proc_macro2::Span>, ApplyError> {
     let mut buf = Vec::new();
     source.read_to_end(&mut buf).map_err(ApplyError::Read)?;
-    let text = std::str::from_utf8(&buf).map_err(ApplyError::Utf)?;
+    let text = core::str::from_utf8(&buf).map_err(ApplyError::Utf)?;
 
     let ast = syn::parse_file(text).map_err(ApplyError::Syn)?;
 
@@ -305,7 +383,7 @@ fn apply<R: Read, W: Write>(
     }
 }
 
-// Finds the `#[instrument]` attribute on a function.
+/// Finds the `#[instrument]` attribute on a function.
 fn find_instrumented(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
     attrs.iter().find(|attr| {
         match &attr.meta {
@@ -316,9 +394,13 @@ fn find_instrumented(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
     })
 }
 
+/// The description of attributes on a function signature we care about.
 struct Desc {
+    /// Does the function have the `#[tracing::instrument]` attribute macro?
     instrumented: bool,
+    /// Does the function have the `#[clippy_tracing_attributes::clippy_tracing_skip]` attribute macro?
     skipped: bool,
+    /// Does the function have the `#[test]` attribute macro?
     test: bool,
 }
 
