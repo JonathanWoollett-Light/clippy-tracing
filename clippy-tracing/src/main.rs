@@ -160,7 +160,7 @@ fn instrument(sig: &syn::Signature) -> String {
             _ => Vec::new(),
         },
     });
-    let args = itertools::intersperse(iter, String::from(",")).collect::<String>();
+    let args = itertools::intersperse(iter, String::from(", ")).collect::<String>();
 
     format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
 }
