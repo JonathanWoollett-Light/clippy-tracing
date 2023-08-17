@@ -69,10 +69,8 @@ impl From<StripVisitor> for String {
     fn from(visitor: StripVisitor) -> String {
         let mut vec = visitor.0.into_iter().collect::<Vec<_>>();
         vec.sort_by_key(|(i, _)| *i);
-        vec.into_iter().fold(String::new(), |mut output, (_, x)| {
-            output.push_str(&format!("{x}\n"));
-            output
-        })
+        itertools::intersperse(vec.into_iter().map(|(_, x)| x), String::from("\n"))
+            .collect::<String>()
     }
 }
 impl syn::visit::Visit<'_> for StripVisitor {

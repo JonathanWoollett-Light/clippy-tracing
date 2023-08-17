@@ -53,6 +53,17 @@ fn check(given: &str, expected: bool) {
     assert_eq!(output.stderr, []);
     remove_file(path).unwrap();
 }
+fn strip(given: &str, expected: &str) {
+    let path = setup(given);
+    let output = Command::new(BINARY)
+        .args(["--action", "strip", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    check_fix(expected, &path);
+}
 
 #[test]
 fn fix_one() {
@@ -65,4 +76,11 @@ fn fix_one() {
 fn check_one() {
     const GIVEN: &str = "fn main() { }";
     check(GIVEN, false);
+}
+
+#[test]
+fn strip_one() {
+    const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }";
+    const EXPECTED: &str = "fn main() { }";
+    strip(GIVEN, EXPECTED);
 }
