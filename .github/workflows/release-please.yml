@@ -5,8 +5,18 @@ on:
 
 jobs:
   release-please:
+    strategy:
+      matrix:
+        include:
+          - crate: clippy-tracing-attributes
+            path: clippy-tracing-attributes
+          - crate: clippy-tracing
+            path: clippy-tracing
     runs-on: ubuntu-latest
     steps:
       - uses: google-github-actions/release-please-action@v3
         with:
+          monorepo-tags: true
           release-type: rust
+          path: ${{ matrix.path }}
+          package-name: ${{ matrix.crate }}
