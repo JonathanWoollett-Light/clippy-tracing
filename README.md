@@ -38,7 +38,7 @@ mod tests {
 ```
 
 ```bash
-clippy-tracing --action check
+clippy-tracing --action check # Missing instrumentation at {path}:9:4.\n
 echo $? # 1
 clippy-tracing --action fix
 echo $? # 0
