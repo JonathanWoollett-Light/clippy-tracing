@@ -41,18 +41,6 @@ fn fix(given: &str, expected: &str) {
     assert_eq!(output.stderr, []);
     check_fix(expected, &path);
 }
-fn check(given: &str, expected: bool) {
-    let path = setup(given);
-    let output = Command::new(BINARY)
-        .args(["--action", "check", "--path", &path])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some((!expected) as u8 as i32));
-    let expected_stdout = format!("Missing instrumentation at {path}:1:0.\n");
-    assert_eq!(output.stdout, expected_stdout.as_bytes());
-    assert_eq!(output.stderr, []);
-    remove_file(path).unwrap();
-}
 fn strip(given: &str, expected: &str) {
     let path = setup(given);
     let output = Command::new(BINARY)
@@ -75,7 +63,29 @@ fn fix_one() {
 #[test]
 fn check_one() {
     const GIVEN: &str = "fn main() { }";
-    check(GIVEN, false);
+    let path = setup(GIVEN);
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let expected_stdout = format!("Missing instrumentation at {path}:1:0.\n");
+    assert_eq!(output.stdout, expected_stdout.as_bytes());
+    assert_eq!(output.stderr, []);
+    remove_file(path).unwrap();
+}
+#[test]
+fn check_two() {
+    const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[test]\nfn my_test() { }";
+    let path = setup(GIVEN);
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    remove_file(path).unwrap();
 }
 
 #[test]
