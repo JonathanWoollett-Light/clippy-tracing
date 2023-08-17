@@ -95,6 +95,23 @@ fn strip_one() {
     const EXPECTED: &str = "fn main() { }";
     strip(GIVEN, EXPECTED);
 }
+
+#[test]
+fn strip_two() {
+    const GIVEN: &str =
+        "#[tracing::instrument(    \nlevel = \"trace\",\n    skip()\n)]\nfn main() { }";
+    const EXPECTED: &str = "fn main() { }";
+    strip(GIVEN, EXPECTED);
+}
+
+#[test]
+fn strip_three() {
+    const EXPECTED: &str = "impl Unit {\n    fn one() {}\n}";
+    const GIVEN: &str =
+        "impl Unit {\n    #[tracing::instrument(level = \"trace\", skip())]\n    fn one() {}\n}";
+    strip(GIVEN, EXPECTED);
+}
+
 #[test]
 fn readme() {
     const GIVEN: &str = r#"fn main() {

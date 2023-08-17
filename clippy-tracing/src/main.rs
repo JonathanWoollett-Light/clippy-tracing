@@ -76,15 +76,21 @@ impl From<StripVisitor> for String {
 impl syn::visit::Visit<'_> for StripVisitor {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
         if let Some(instrument) = find_instrumented(&i.attrs) {
-            let line = instrument.span().start().line - 1;
-            self.0.remove(&line);
+            let start = instrument.span().start().line - 1;
+            let end = instrument.span().end().line;
+            for line in start..end {
+                self.0.remove(&line);
+            }
         }
         self.visit_block(&i.block);
     }
     fn visit_item_fn(&mut self, i: &syn::ItemFn) {
         if let Some(instrument) = find_instrumented(&i.attrs) {
-            let line = instrument.span().start().line - 1;
-            self.0.remove(&line);
+            let start = instrument.span().start().line - 1;
+            let end = instrument.span().end().line;
+            for line in start..end {
+                self.0.remove(&line);
+            }
         }
         self.visit_block(&i.block);
     }
