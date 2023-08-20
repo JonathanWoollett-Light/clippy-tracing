@@ -93,3 +93,8 @@ mod tests {
     }
 }
 ```
+
+
+### `log`
+
+Supports [`log_instrument`](https://github.com/JonathanWoollett-Light/log-instrument) when compiled with the `log` feature.

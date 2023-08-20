@@ -183,6 +183,7 @@ impl syn::visit::Visit<'_> for FixVisitor {
 }
 
 /// Returns the instrument macro for a given function signature.
+#[cfg(not(feature = "log"))]
 fn instrument(sig: &syn::Signature) -> String {
     let iter = sig.inputs.iter().flat_map(|arg| match arg {
         syn::FnArg::Receiver(_) => vec![String::from("self")],
@@ -201,6 +202,12 @@ fn instrument(sig: &syn::Signature) -> String {
     let args = itertools::intersperse(iter, String::from(", ")).collect::<String>();
 
     format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
+}
+
+/// Returns the instrument macro for a given function signature.
+#[cfg(feature = "log")]
+fn instrument(_sig: &syn::Signature) -> String {
+    String::from("#[log_instrument::instrument]")
 }
 
 use std::process::ExitCode;
