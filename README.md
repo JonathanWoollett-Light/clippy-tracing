@@ -5,7 +5,9 @@
 
 **This is rough tool**
 
-A tool to add, remove and check for `tracing::instrument` in large projects where it is infeasible to manually add it to thousands of functions.
+A tool to add, remove and check for
+[`tracing::instrument`](https://docs.rs/tracing/latest/tracing/attr.instrument.html)
+in large projects where it is infeasible to manually add it to thousands of functions.
 
 ### Installation
 
