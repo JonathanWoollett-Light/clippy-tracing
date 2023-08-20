@@ -75,15 +75,21 @@ fn exec_error() {
 #[test]
 fn fix_one() {
     const GIVEN: &str = "fn main() { }\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
+    #[cfg(not(feature = "log"))]
     const EXPECTED: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[tracing::instrument(level = \"trace\", skip(lhs, rhs))]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
+    #[cfg(feature = "log")]
+    const EXPECTED: &str = "#[log_instrument::instrument]\nfn main() { }\n#[log_instrument::instrument]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
     fix(GIVEN, EXPECTED);
 }
 
 #[test]
 fn fix_two() {
     const GIVEN: &str = "impl Unit {\n    fn one() {}\n}";
+    #[cfg(not(feature = "log"))]
     const EXPECTED: &str =
         "impl Unit {\n    #[tracing::instrument(level = \"trace\", skip())]\n    fn one() {}\n}";
+    #[cfg(feature = "log")]
+    const EXPECTED: &str = "impl Unit {\n    #[log_instrument::instrument]\n    fn one() {}\n}";
     fix(GIVEN, EXPECTED);
 }
 
@@ -104,7 +110,10 @@ fn check_one() {
 
 #[test]
 fn check_two() {
+    #[cfg(not(feature = "log"))]
     const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[test]\nfn my_test() { }";
+    #[cfg(feature = "log")]
+    const GIVEN: &str = "#[log_instrument::instrument]\nfn main() { }\n#[test]\nfn my_test() { }";
     let path: String = setup(GIVEN);
     let output = Command::new(BINARY)
         .args(["--action", "check", "--path", &path])
@@ -133,15 +142,21 @@ fn check_three() {
 
 #[test]
 fn strip_one() {
+    #[cfg(not(feature = "log"))]
     const GIVEN: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }";
+    #[cfg(feature = "log")]
+    const GIVEN: &str = "#[log_instrument::instrument]\nfn main() { }";
     const EXPECTED: &str = "fn main() { }";
     strip(GIVEN, EXPECTED);
 }
 
 #[test]
 fn strip_two() {
+    #[cfg(not(feature = "log"))]
     const GIVEN: &str =
         "#[tracing::instrument(    \nlevel = \"trace\",\n    skip()\n)]\nfn main() { }";
+    #[cfg(feature = "log")]
+    const GIVEN: &str = "#[log_instrument::instrument]\nfn main() { }";
     const EXPECTED: &str = "fn main() { }";
     strip(GIVEN, EXPECTED);
 }
@@ -149,8 +164,11 @@ fn strip_two() {
 #[test]
 fn strip_three() {
     const EXPECTED: &str = "impl Unit {\n    fn one() {}\n}";
+    #[cfg(not(feature = "log"))]
     const GIVEN: &str =
         "impl Unit {\n    #[tracing::instrument(level = \"trace\", skip())]\n    fn one() {}\n}";
+    #[cfg(feature = "log")]
+    const GIVEN: &str = "impl Unit {\n    #[log_instrument::instrument]\n    fn one() {}\n}";
     strip(GIVEN, EXPECTED);
 }
 
@@ -183,7 +201,7 @@ mod tests {
     let missing = format!("Missing instrumentation at {path}:9:4.\n");
     assert_eq!(output.stdout, missing.as_bytes());
     assert_eq!(output.stderr, []);
-
+    #[cfg(not(feature = "log"))]
     const EXPECTED: &str = r#"#[tracing::instrument(level = "trace", skip())]
 fn main() {
     println!("Hello World!");
@@ -195,6 +213,27 @@ fn add(lhs: i32, rhs: i32) -> i32 {
 #[cfg(tests)]
 mod tests {
     #[tracing::instrument(level = "trace", skip(lhs, rhs))]
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+
+    #[cfg(feature = "log")]
+    const EXPECTED: &str = r#"#[log_instrument::instrument]
+fn main() {
+    println!("Hello World!");
+}
+#[log_instrument::instrument]
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    #[log_instrument::instrument]
     fn sub(lhs: i32, rhs: i32) -> i32 {
         lhs - rhs
     }

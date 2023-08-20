@@ -36,8 +36,13 @@ jobs:
     - name: Audit
       run: cargo audit
       
+    # Install and cache `cargo-hack`
+    - uses: taiki-e/cache-cargo-install-action@v1
+      with:
+        tool: cargo-hack
+
     - name: Check
-      run: cargo check
+      run: cargo hack check --feature-powerset --no-dev-deps
       
     - name: Clippy
       run: |
@@ -53,7 +58,7 @@ jobs:
       run: cargo udeps
 
     - name: Test
-      run: cargo test
+      run: cargo hack test --feature-powerset
 
     # https://github.com/taiki-e/cargo-llvm-cov#continuous-integration
 
