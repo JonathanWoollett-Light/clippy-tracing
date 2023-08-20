@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.4.0...clippy-tracing-v0.5.0) (2023-08-20)
+
+
+### Features
+
+* `clippy::restriction` ([06733dc](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/06733dc146018b6ed7efb3b9623ac53852038216))
+* `log_instrument` ([68027f0](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/68027f06640dcf4d2806288adc8e1e9ad72d3a85))
+* Mult-line`strip` ([8f853cf](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/8f853cf146fb4febb8c1940db04a0c8f6805ec59))
+
 ## [0.4.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.3.2...clippy-tracing-v0.4.0) (2023-08-17)
 
 
