@@ -1,6 +1,6 @@
 [package]
 name = "clippy-tracing"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "A tool to add, remove and check for `tracing::instrument` in large projects where it is infeasible to manually add it to thousands of functions."
 license = "Apache-2.0"
