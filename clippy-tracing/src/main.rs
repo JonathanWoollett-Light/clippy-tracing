@@ -13,7 +13,8 @@
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::wildcard_enum_match_arm,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::single_char_lifetime_names
 )]
 
 extern crate alloc;
@@ -39,10 +40,10 @@ struct CommandLineArgs {
     /// The path to look in.
     #[arg(long)]
     path: Option<PathBuf>,
-    /// When adding instrumentation should it include the full path.
-    /// e.g. `tracing::instrument` or `instrument`.
+    /// When adding instrumentation use a custom suffix
+    /// e.g. `tracing::instrument` vs `my::custom::suffix::instrument`.
     #[arg(long)]
-    suffix: Option<bool>,
+    suffix: Option<String>,
     /// Sub-paths which contain any of the strings from this list will be ignored.
     #[arg(long, value_delimiter = ',')]
     exclude: Vec<String>,
@@ -151,19 +152,19 @@ impl syn::visit::Visit<'_> for CheckVisitor {
 }
 
 /// Visitor for the `fix` action.
-struct FixVisitor {
-    /// Whether to include path suffix.
-    suffix: bool,
+struct FixVisitor<'a> {
+    /// A custom path suffix.
+    suffix: &'a Option<String>,
     /// Source
     list: SegmentedList,
 }
-impl From<FixVisitor> for String {
+impl From<FixVisitor<'_>> for String {
     fn from(visitor: FixVisitor) -> String {
         String::from(visitor.list)
     }
 }
 
-impl syn::visit::Visit<'_> for FixVisitor {
+impl syn::visit::Visit<'_> for FixVisitor<'_> {
     fn visit_impl_item_fn(&mut self, i: &syn::ImplItemFn) {
         let attr = check_attributes(&i.attrs);
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
@@ -193,7 +194,7 @@ impl syn::visit::Visit<'_> for FixVisitor {
 
 /// Returns the instrument macro for a given function signature.
 #[cfg(not(feature = "log"))]
-fn instrument(sig: &syn::Signature, suffix: bool) -> String {
+fn instrument(sig: &syn::Signature, suffix: &Option<String>) -> String {
     let iter = sig.inputs.iter().flat_map(|arg| match arg {
         syn::FnArg::Receiver(_) => vec![String::from("self")],
         syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
@@ -212,16 +213,16 @@ fn instrument(sig: &syn::Signature, suffix: bool) -> String {
 
     format!(
         "#[{}instrument(level = \"trace\", skip({args}))]",
-        if suffix { "tracing::" } else { "" }
+        suffix.as_ref().map_or("tracing::", String::as_str)
     )
 }
 
 /// Returns the instrument macro for a given function signature.
 #[cfg(feature = "log")]
-fn instrument(_sig: &syn::Signature, suffix: bool) -> String {
+fn instrument(_sig: &syn::Signature, suffix: &Option<String>) -> String {
     format!(
         "#[{}instrument]",
-        if suffix { "log_instrument::" } else { "" },
+        suffix.as_ref().map_or("log_instrument::", String::as_str)
     )
 }
 
@@ -289,7 +290,6 @@ impl Error for ExecError {}
 /// Wraps functionality from `main` to support returning an error then handling it.
 fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
     let args = CommandLineArgs::parse();
-    let suffix = args.suffix.unwrap_or(true);
 
     let path = args.path.unwrap_or(PathBuf::from("."));
     for entry_res in WalkDir::new(path).follow_links(true) {
@@ -309,7 +309,7 @@ fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
                 .read(true)
                 .open(&entry_path)
                 .map_err(ExecError::File)?;
-            let res = apply(&args.action, suffix, file, |_| {
+            let res = apply(&args.action, &args.suffix, file, |_| {
                 OpenOptions::new()
                     .write(true)
                     .truncate(true)
@@ -357,7 +357,7 @@ impl Error for ApplyError {}
 /// given closure.
 fn apply<R: Read, W: Write>(
     action: &Action,
-    suffix: bool,
+    suffix: &Option<String>,
     mut source: R,
     target: impl Fn(R) -> Result<W, std::io::Error>,
 ) -> Result<Option<proc_macro2::Span>, ApplyError> {
