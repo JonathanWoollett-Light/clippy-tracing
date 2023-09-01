@@ -26,7 +26,6 @@ fn check_file(text: &str, path: &str) {
         .unwrap();
     let mut buffer = String::new();
     file.read_to_string(&mut buffer).unwrap();
-    println!("path: {path}");
     assert_eq!(text, buffer);
 }
 
@@ -246,6 +245,107 @@ mod tests {
     // Fix
     let output = Command::new(BINARY)
         .args(["--action", "fix", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    check_file(EXPECTED, &path);
+
+    // Check
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+
+    // Strip
+    let output = Command::new(BINARY)
+        .args(["--action", "strip", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, []);
+    assert_eq!(output.stderr, []);
+    check_file(GIVEN, &path);
+}
+
+#[test]
+fn readme_suffix() {
+    const GIVEN: &str = r#"fn main() {
+    println!("Hello World!");
+}
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+    let path: String = setup(GIVEN);
+
+    // Check
+    let output = Command::new(BINARY)
+        .args(["--action", "check", "--path", &path])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let missing = format!("Missing instrumentation at {path}:9:4.\n");
+    assert_eq!(output.stdout, missing.as_bytes());
+    assert_eq!(output.stderr, []);
+    #[cfg(not(feature = "log"))]
+    const EXPECTED: &str = r#"#[instrument(level = "trace", skip())]
+fn main() {
+    println!("Hello World!");
+}
+#[instrument(level = "trace", skip(lhs, rhs))]
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    #[instrument(level = "trace", skip(lhs, rhs))]
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+
+    #[cfg(feature = "log")]
+    const EXPECTED: &str = r#"#[instrument]
+fn main() {
+    println!("Hello World!");
+}
+#[instrument]
+fn add(lhs: i32, rhs: i32) -> i32 {
+    lhs + rhs
+}
+#[cfg(tests)]
+mod tests {
+    #[instrument]
+    fn sub(lhs: i32, rhs: i32) -> i32 {
+        lhs - rhs
+    }
+    #[test]
+    fn test_one() {
+        assert_eq!(add(1,1), sub(2, 1));
+    }
+}"#;
+
+    // Fix
+    let output = Command::new(BINARY)
+        .args(["--action", "fix", "--suffix", "false", "--path", &path])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));

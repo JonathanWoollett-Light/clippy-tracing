@@ -39,6 +39,10 @@ struct CommandLineArgs {
     /// The path to look in.
     #[arg(long)]
     path: Option<PathBuf>,
+    /// When adding instrumentation should it include the full path.
+    /// e.g. `tracing::instrument` or `instrument`.
+    #[arg(long)]
+    suffix: Option<bool>,
     /// Sub-paths which contain any of the strings from this list will be ignored.
     #[arg(long, value_delimiter = ',')]
     exclude: Vec<String>,
@@ -147,10 +151,15 @@ impl syn::visit::Visit<'_> for CheckVisitor {
 }
 
 /// Visitor for the `fix` action.
-struct FixVisitor(SegmentedList);
+struct FixVisitor {
+    /// Whether to include path suffix.
+    suffix: bool,
+    /// Source
+    list: SegmentedList,
+}
 impl From<FixVisitor> for String {
     fn from(visitor: FixVisitor) -> String {
-        String::from(visitor.0)
+        String::from(visitor.list)
     }
 }
 
@@ -160,10 +169,10 @@ impl syn::visit::Visit<'_> for FixVisitor {
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.span().start().line;
 
-            let attr_string = instrument(&i.sig);
+            let attr_string = instrument(&i.sig, self.suffix);
             let indent = i.span().start().column;
             let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
-            self.0.set_before(line - 1, indent_attr);
+            self.list.set_before(line - 1, indent_attr);
         }
         self.visit_block(&i.block);
     }
@@ -173,10 +182,10 @@ impl syn::visit::Visit<'_> for FixVisitor {
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.span().start().line;
 
-            let attr_string = instrument(&i.sig);
+            let attr_string = instrument(&i.sig, self.suffix);
             let indent = i.span().start().column;
             let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
-            self.0.set_before(line - 1, indent_attr);
+            self.list.set_before(line - 1, indent_attr);
         }
         self.visit_block(&i.block);
     }
@@ -184,7 +193,7 @@ impl syn::visit::Visit<'_> for FixVisitor {
 
 /// Returns the instrument macro for a given function signature.
 #[cfg(not(feature = "log"))]
-fn instrument(sig: &syn::Signature) -> String {
+fn instrument(sig: &syn::Signature, suffix: bool) -> String {
     let iter = sig.inputs.iter().flat_map(|arg| match arg {
         syn::FnArg::Receiver(_) => vec![String::from("self")],
         syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
@@ -201,13 +210,19 @@ fn instrument(sig: &syn::Signature) -> String {
     });
     let args = itertools::intersperse(iter, String::from(", ")).collect::<String>();
 
-    format!("#[tracing::instrument(level = \"trace\", skip({args}))]")
+    format!(
+        "#[{}instrument(level = \"trace\", skip({args}))]",
+        if suffix { "tracing::" } else { "" }
+    )
 }
 
 /// Returns the instrument macro for a given function signature.
 #[cfg(feature = "log")]
-fn instrument(_sig: &syn::Signature) -> String {
-    String::from("#[log_instrument::instrument]")
+fn instrument(_sig: &syn::Signature, suffix: bool) -> String {
+    format!(
+        "#[{}instrument]",
+        if suffix { "log_instrument::" } else { "" },
+    )
 }
 
 use std::process::ExitCode;
@@ -274,6 +289,7 @@ impl Error for ExecError {}
 /// Wraps functionality from `main` to support returning an error then handling it.
 fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
     let args = CommandLineArgs::parse();
+    let suffix = args.suffix.unwrap_or(true);
 
     let path = args.path.unwrap_or(PathBuf::from("."));
     for entry_res in WalkDir::new(path).follow_links(true) {
@@ -293,7 +309,7 @@ fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
                 .read(true)
                 .open(&entry_path)
                 .map_err(ExecError::File)?;
-            let res = apply(&args.action, file, |_| {
+            let res = apply(&args.action, suffix, file, |_| {
                 OpenOptions::new()
                     .write(true)
                     .truncate(true)
@@ -341,6 +357,7 @@ impl Error for ApplyError {}
 /// given closure.
 fn apply<R: Read, W: Write>(
     action: &Action,
+    suffix: bool,
     mut source: R,
     target: impl Fn(R) -> Result<W, std::io::Error>,
 ) -> Result<Option<proc_macro2::Span>, ApplyError> {
@@ -372,13 +389,16 @@ fn apply<R: Read, W: Write>(
             Ok(visitor.0)
         }
         Action::Fix => {
-            let mut visitor = FixVisitor(SegmentedList {
-                first: String::new(),
-                inner: text
-                    .split('\n')
-                    .map(|x| (String::from(x), String::new()))
-                    .collect(),
-            });
+            let mut visitor = FixVisitor {
+                suffix,
+                list: SegmentedList {
+                    first: String::new(),
+                    inner: text
+                        .split('\n')
+                        .map(|x| (String::from(x), String::new()))
+                        .collect(),
+                },
+            };
             visitor.visit_file(&ast);
             let out = String::from(visitor);
             target(source)
