@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.5.0...clippy-tracing-v0.6.0) (2023-09-01)
+
+
+### Features
+
+* `suffix` arguments ([2f49820](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/2f498207a54a1ec6e2c350b95ec000edefe8d41c))
+
 ## [0.5.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.4.0...clippy-tracing-v0.5.0) (2023-08-20)
 
 
