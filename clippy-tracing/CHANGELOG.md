@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.6.0...clippy-tracing-v0.7.0) (2023-10-13)
+
+
+### Features
+
+* `cfg_attr` support ([4ade55b](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/4ade55b221bbb28f2bc537e2ed82cc35205e80f8))
+* Custom path suffix ([6d6b191](https://github.com/JonathanWoollett-Light/clippy-tracing/commit/6d6b1917253e03e345a79acfbb7294c26fb8e010))
+
 ## [0.6.0](https://github.com/JonathanWoollett-Light/clippy-tracing/compare/clippy-tracing-v0.5.0...clippy-tracing-v0.6.0) (2023-09-01)
 
 
