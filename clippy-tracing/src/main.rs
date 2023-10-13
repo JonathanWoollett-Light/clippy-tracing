@@ -30,6 +30,7 @@ use syn::visit::Visit;
 use walkdir::WalkDir;
 
 use std::error::Error;
+use std::process::ExitCode;
 
 /// The command line arguments for the application.
 #[derive(Parser)]
@@ -40,10 +41,15 @@ struct CommandLineArgs {
     /// The path to look in.
     #[arg(long)]
     path: Option<PathBuf>,
-    /// When adding instrumentation use a custom suffix
-    /// e.g. `tracing::instrument` vs `my::custom::suffix::instrument`.
+    /// When adding instrumentation use a custom suffix e.g.
+    /// `tracing::instrument` vs `my::custom::suffix::instrument`.
     #[arg(long)]
     suffix: Option<String>,
+    /// Whether to add a `cfg_attr` condition e.g.
+    /// `#[cfg_attr(feature = "tracing", log_instrument::instrument)]` vs
+    /// `#[log_instrument::instrument]`.
+    #[arg(long)]
+    cfg_attr: Option<String>,
     /// Sub-paths which contain any of the strings from this list will be ignored.
     #[arg(long, value_delimiter = ',')]
     exclude: Vec<String>,
@@ -155,6 +161,8 @@ impl syn::visit::Visit<'_> for CheckVisitor {
 struct FixVisitor<'a> {
     /// A custom path suffix.
     suffix: &'a Option<String>,
+    /// A `cfg_attr` condition.
+    cfg_attr: &'a Option<String>,
     /// Source
     list: SegmentedList,
 }
@@ -170,7 +178,7 @@ impl syn::visit::Visit<'_> for FixVisitor<'_> {
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.span().start().line;
 
-            let attr_string = instrument(&i.sig, self.suffix);
+            let attr_string = instrument(&i.sig, self.suffix, self.cfg_attr);
             let indent = i.span().start().column;
             let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
             self.list.set_before(line - 1, indent_attr);
@@ -183,7 +191,7 @@ impl syn::visit::Visit<'_> for FixVisitor<'_> {
         if !attr.instrumented && !attr.skipped && !attr.test && i.sig.constness.is_none() {
             let line = i.span().start().line;
 
-            let attr_string = instrument(&i.sig, self.suffix);
+            let attr_string = instrument(&i.sig, self.suffix, self.cfg_attr);
             let indent = i.span().start().column;
             let indent_attr = format!("{}{attr_string}", " ".repeat(indent));
             self.list.set_before(line - 1, indent_attr);
@@ -192,9 +200,18 @@ impl syn::visit::Visit<'_> for FixVisitor<'_> {
     }
 }
 
+fn instrument(sig: &syn::Signature, suffix: &Option<String>, cfg_attr: &Option<String>) -> String {
+    let instr = inner_instrument(sig, suffix);
+    if let Some(cfg_attr) = cfg_attr {
+        format!("#[cfg_attr({cfg_attr}, {instr})]")
+    } else {
+        format!("#[{instr}]")
+    }
+}
+
 /// Returns the instrument macro for a given function signature.
 #[cfg(not(feature = "log"))]
-fn instrument(sig: &syn::Signature, suffix: &Option<String>) -> String {
+fn inner_instrument(sig: &syn::Signature, suffix: &Option<String>) -> String {
     let iter = sig.inputs.iter().flat_map(|arg| match arg {
         syn::FnArg::Receiver(_) => vec![String::from("self")],
         syn::FnArg::Typed(syn::PatType { pat, .. }) => match &**pat {
@@ -210,23 +227,20 @@ fn instrument(sig: &syn::Signature, suffix: &Option<String>) -> String {
         },
     });
     let args = itertools::intersperse(iter, String::from(", ")).collect::<String>();
-
     format!(
-        "#[{}instrument(level = \"trace\", skip({args}))]",
+        "{}instrument(level = \"trace\", skip({args}))",
         suffix.as_ref().map_or("tracing::", String::as_str)
     )
 }
 
 /// Returns the instrument macro for a given function signature.
 #[cfg(feature = "log")]
-fn instrument(_sig: &syn::Signature, suffix: &Option<String>) -> String {
+fn inner_instrument(_sig: &syn::Signature, suffix: &Option<String>) -> String {
     format!(
-        "#[{}instrument]",
+        "{}instrument",
         suffix.as_ref().map_or("log_instrument::", String::as_str)
     )
 }
-
-use std::process::ExitCode;
 
 /// Type to return from `main` to support returning an error then handling it.
 #[repr(u8)]
@@ -309,7 +323,7 @@ fn exec() -> Result<Option<(PathBuf, usize, usize)>, ExecError> {
                 .read(true)
                 .open(&entry_path)
                 .map_err(ExecError::File)?;
-            let res = apply(&args.action, &args.suffix, file, |_| {
+            let res = apply(&args.action, &args.suffix, &args.cfg_attr, file, |_| {
                 OpenOptions::new()
                     .write(true)
                     .truncate(true)
@@ -358,6 +372,7 @@ impl Error for ApplyError {}
 fn apply<R: Read, W: Write>(
     action: &Action,
     suffix: &Option<String>,
+    cfg_attr: &Option<String>,
     mut source: R,
     target: impl Fn(R) -> Result<W, std::io::Error>,
 ) -> Result<Option<proc_macro2::Span>, ApplyError> {
@@ -391,6 +406,7 @@ fn apply<R: Read, W: Write>(
         Action::Fix => {
             let mut visitor = FixVisitor {
                 suffix,
+                cfg_attr,
                 list: SegmentedList {
                     first: String::new(),
                     inner: text
@@ -414,7 +430,8 @@ fn apply<R: Read, W: Write>(
 fn find_instrumented(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
     attrs.iter().find(|attr| {
         match &attr.meta {
-            syn::Meta::List(syn::MetaList { path, .. }) => matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument"),
+            syn::Meta::List(syn::MetaList { path, tokens, .. }) => matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument") ||
+                (matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "cfg_attr") && tokens.clone().into_iter().any(|token| matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "instrument"))),
             syn::Meta::Path(syn::Path { segments, .. }) => matches!(segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "instrument"),
             syn::Meta::NameValue(_) => false,
         }
@@ -442,6 +459,16 @@ fn check_attributes(attrs: &[syn::Attribute]) -> Desc {
     let mut test = false;
 
     for attr in attrs {
+        // Match `#[cfg_attr(.., instrument)]`.
+        if match &attr.meta {
+            syn::Meta::List(syn::MetaList { path, tokens, .. }) => {
+                matches!(path.segments.last(), Some(syn::PathSegment { ident, .. }) if ident == "cfg_attr") && tokens.clone().into_iter().any(|token| matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "instrument"))
+            }
+            _ => false
+        } {
+            instrumented = true;
+        }
+
         // Match `#[instrument]`.
         if match &attr.meta {
             syn::Meta::List(syn::MetaList { path, .. }) => {

@@ -29,15 +29,23 @@ fn check_file(text: &str, path: &str) {
     assert_eq!(text, buffer);
 }
 
-fn fix(given: &str, expected: &str) {
+fn fix(given: &str, expected: &str, cfg_attr: Option<&'static str>) {
     let path = setup(given);
-    let output = Command::new(BINARY)
-        .args(["--action", "fix", "--path", &path])
-        .output()
-        .unwrap();
+
+    let output = if let Some(cfg_attr) = cfg_attr {
+        Command::new(BINARY)
+            .args(["--action", "fix", "--path", &path, "--cfg-attr", cfg_attr])
+            .output()
+            .unwrap()
+    } else {
+        Command::new(BINARY)
+            .args(["--action", "fix", "--path", &path])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(std::str::from_utf8(&output.stdout).unwrap(), "");
+    assert_eq!(std::str::from_utf8(&output.stderr).unwrap(), "");
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, []);
-    assert_eq!(output.stderr, []);
     check_file(expected, &path);
     remove_file(path).unwrap();
 }
@@ -78,7 +86,7 @@ fn fix_one() {
     const EXPECTED: &str = "#[tracing::instrument(level = \"trace\", skip())]\nfn main() { }\n#[tracing::instrument(level = \"trace\", skip(lhs, rhs))]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
     #[cfg(feature = "log")]
     const EXPECTED: &str = "#[log_instrument::instrument]\nfn main() { }\n#[log_instrument::instrument]\nfn add(lhs: i32, rhs: i32) {\n    lhs + rhs\n}";
-    fix(GIVEN, EXPECTED);
+    fix(GIVEN, EXPECTED, None);
 }
 
 #[test]
@@ -89,7 +97,18 @@ fn fix_two() {
         "impl Unit {\n    #[tracing::instrument(level = \"trace\", skip())]\n    fn one() {}\n}";
     #[cfg(feature = "log")]
     const EXPECTED: &str = "impl Unit {\n    #[log_instrument::instrument]\n    fn one() {}\n}";
-    fix(GIVEN, EXPECTED);
+    fix(GIVEN, EXPECTED, None);
+}
+
+#[test]
+fn fix_three() {
+    const GIVEN: &str = "impl Unit {\n    fn one() {}\n}";
+    #[cfg(not(feature = "log"))]
+    const EXPECTED: &str =
+        "impl Unit {\n    #[cfg_attr(feature = \"tracing\", tracing::instrument(level = \"trace\", skip()))]\n    fn one() {}\n}";
+    #[cfg(feature = "log")]
+    const EXPECTED: &str = "impl Unit {\n    #[cfg_attr(feature = \"tracing\", log_instrument::instrument)]\n    fn one() {}\n}";
+    fix(GIVEN, EXPECTED, Some("feature = \"tracing\""));
 }
 
 #[test]
@@ -126,16 +145,22 @@ fn check_two() {
 
 #[test]
 fn check_three() {
-    const GIVEN: &str = "impl One {\n    fn one() { }\n}";
+    const GIVEN: &str = "impl Unit {\n    #[cfg_attr(feature = \"tracing\", tracing::instrument(level = \"trace\", skip()))]\n    fn one() {}\n}";
     let path = setup(GIVEN);
     let output = Command::new(BINARY)
-        .args(["--action", "check", "--path", &path])
+        .args([
+            "--action",
+            "check",
+            "--path",
+            &path,
+            "--cfg-attr",
+            "feature = \"tracing\"",
+        ])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    let expected_stdout = format!("Missing instrumentation at {path}:2:4.\n");
-    assert_eq!(output.stdout, expected_stdout.as_bytes());
-    assert_eq!(output.stderr, []);
+    assert_eq!(std::str::from_utf8(&output.stdout).unwrap(), "");
+    assert_eq!(std::str::from_utf8(&output.stderr).unwrap(), "");
+    assert_eq!(output.status.code(), Some(0));
     remove_file(path).unwrap();
 }
 
